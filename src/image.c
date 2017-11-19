@@ -4,6 +4,7 @@
 #include "cuda.h"
 #include <stdio.h>
 #include <math.h>
+#include <ctype.h>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
@@ -14,6 +15,7 @@
 #include "opencv2/highgui/highgui_c.h"
 #include "opencv2/imgproc/imgproc_c.h"
 #include "opencv2/core/version.hpp"
+#define CHINESE
 #ifndef CV_VERSION_EPOCH
 #include "opencv2/videoio/videoio_c.h"
 #endif
@@ -91,13 +93,37 @@ image get_label(image **characters, char *string, int size)
     return b;
 }
 
+#ifdef CHINESE
+image get_label_chinese(image **characters, int class, int size)
+{
+	printf("get_label_chinese class=%d,size=%d\n", class, size);
+	if (characters == NULL) printf("imgae = null\n");
+
+	if (size > 7) size = 7;
+	image label = make_empty_image(0, 0, 0);
+
+	image l = characters[size][class];
+	image n = tile_images(label, l, -size - 1 + (size + 1) / 2);
+	free_image(label);
+	label = n;
+
+	image b = border_image(label, label.h*.25);
+	free_image(label);
+	return b;
+}
+#endif
+
+
 void draw_label(image a, int r, int c, image label, const float *rgb)
 {
+	
     int w = label.w;
     int h = label.h;
     if (r - h >= 0) r = r - h;
 
-    int i, j, k;
+	printf("draw_label r=%d c=%d w=%d h=%d \n", r, c, w, h);
+    
+	int i, j, k;
     for(j = 0; j < h && j + r < a.h; ++j){
         for(i = 0; i < w && i + c < a.w; ++i){
             for(k = 0; k < label.c; ++k){
@@ -110,7 +136,8 @@ void draw_label(image a, int r, int c, image label, const float *rgb)
 
 void draw_box(image a, int x1, int y1, int x2, int y2, float r, float g, float b)
 {
-    //normalize_image(a);
+	printf("draw_box x1=%d y1=%d x2=%d y2=%d\n",x1,y1,x2,y2);
+	//normalize_image(a);
     int i;
     if(x1 < 0) x1 = 0;
     if(x1 >= a.w) x1 = a.w-1;
@@ -172,16 +199,250 @@ image **load_alphabet()
     image **alphabets = calloc(nsize, sizeof(image));
     for(j = 0; j < nsize; ++j){
         alphabets[j] = calloc(128, sizeof(image));
+		#ifdef CHINESE
+			for (i = 0; i < 20; ++i) {
+			char buff[256];
+			sprintf(buff, "data/labels/cn_%d_%d.png", i, j);
+			alphabets[j][i] = load_image_color(buff, 0, 0);
+		}
+		#else
         for(i = 32; i < 127; ++i){
             char buff[256];
             sprintf(buff, "data/labels/%d_%d.png", i, j);
             alphabets[j][i] = load_image_color(buff, 0, 0);
         }
+		#endif	
     }
     return alphabets;
 }
 
-void draw_detections(image im, int num, float thresh, box *boxes, float **probs, char **names, image **alphabet, int classes)
+image **load_alphabet_fromdir(const char * labels_dir,int class_num)
+{
+	printf("load_alphabet_fromdir dir=%s class_num=%d\n", labels_dir, class_num);
+	int i, j;
+	const int nsize = 8;
+	image **alphabets = calloc(nsize, sizeof(image));
+	for (j = 0; j < nsize; ++j) {
+		alphabets[j] = calloc(128, sizeof(image));
+#ifdef CHINESE
+		for (i = 0; i < class_num; ++i) {
+			char buff[256];
+			sprintf(buff, "%s/cn_%d_%d.png", labels_dir, i, j);
+			alphabets[j][i] = load_image_color(buff, 0, 0);
+		}
+#else
+		for (i = 32; i < 127; ++i) {
+			char buff[256];
+			sprintf(buff, "data/labels/%d_%d.png", i, j);
+			alphabets[j][i] = load_image_color(buff, 0, 0);
+		}
+#endif	
+	}
+	return alphabets;
+}
+
+
+
+#ifdef OPENCV
+
+void putWChar(ForFreeType * ft, IplImage *img, wchar_t wc, CvPoint * pos, CvScalar color)
+{
+	//printf("putWChar wc=%ls pos=(%d,%d)\n", wc,pos->x,pos->y);
+	// 根据unicode生成字体的二值位图
+
+	FT_UInt glyph_index = FT_Get_Char_Index(ft->m_face, wc);
+
+	//printf("putWChar wc=%ls pos=(%d,%d) index=%u\n", wc, pos->x, pos->y, glyph_index);
+	
+	FT_Load_Glyph(ft->m_face, glyph_index, FT_LOAD_DEFAULT);
+	FT_Render_Glyph(ft->m_face->glyph, FT_RENDER_MODE_MONO);
+
+	//
+
+	FT_GlyphSlot slot = ft->m_face->glyph;
+
+	// 行列数
+
+	int rows = slot->bitmap.rows;
+	int cols = slot->bitmap.width;
+
+	//
+
+	for (int i = 0; i < rows; ++i)
+	{
+		for (int j = 0; j < cols; ++j)
+		{
+			int off = ((img->origin == 0) ? i : (rows - 1 - i))
+				* slot->bitmap.pitch + j / 8;
+
+			if (slot->bitmap.buffer[off] & (0xC0 >> (j % 8)))
+			{
+				int r = (img->origin == 0) ? pos->y - (rows - 1 - i) : pos->y + i;;
+				int c = pos->x + j;
+
+				if (r >= 0 && r < img->height
+					&& c >= 0 && c < img->width)
+				{
+					CvScalar scalar = cvGet2D(img, r, c);
+
+					// 进行色彩融合
+
+					float p = ft->m_fontDiaphaneity;
+					for (int k = 0; k < 4; ++k)
+					{
+						scalar.val[k] = scalar.val[k] * (1 - p) + color.val[k] * p;
+					}
+
+					cvSet2D(img, r, c, scalar);
+				}
+			}
+		} // end for
+	} // end for
+
+	  // 修改下一个字的输出位置
+
+	double space = ft->m_fontSize.val[0] * ft->m_fontSize.val[1];
+	double sep = ft->m_fontSize.val[0] * ft->m_fontSize.val[2];
+
+	pos->x += (int)((cols ? cols : space) + sep);
+}
+
+int putText12(ForFreeType * ft, IplImage *img, const char    *text, CvPoint pos, CvScalar color)
+{
+	if (img == NULL) return -1;
+	if (text == NULL) return -1;
+	int i;
+	for (i = 0; text[i] != '\0'; ++i)
+	{
+		wchar_t wc = text[i];
+
+		// 解析双字节符号
+
+		if (!isascii(wc)) mbtowc(&wc, &text[i++], 2);
+
+		// 输出当前的字符
+		putWChar(ft, img, wc, &pos, color);
+	}
+	return i;
+}
+
+int putText22(ForFreeType * ft, IplImage *img, const wchar_t *text, CvPoint pos, CvScalar color)
+{
+	if (img == NULL) return -1;
+	if (text == NULL) return -1;
+
+	//
+
+	int i;
+	for (i = 0; text[i] != '\0'; ++i)
+	{
+		// 输出当前的字符
+
+		putWChar(ft, img, text[i], &pos, color);
+	}
+	return i;
+}
+
+
+int putText11(ForFreeType * ft, IplImage *img, const char    *text, CvPoint pos)
+{
+	return putText12(ft,img, text, pos, CV_RGB(255, 255, 255));
+}
+
+int putText21(ForFreeType * ft, IplImage *img, const wchar_t *text, CvPoint pos)
+{
+	return putText22(ft,img, text, pos, CV_RGB(255, 255, 255));
+}
+
+
+void getFont(ForFreeType * ft, int *type, CvScalar *size, int *underline, float *diaphaneity)
+{
+	if (type) *type = ft->m_fontType;
+	if (size) *size = ft->m_fontSize;
+	if (underline) *underline = ft->m_fontUnderline;
+	if (diaphaneity) *diaphaneity = ft->m_fontDiaphaneity;
+}
+
+void setFont(ForFreeType * ft, int *type, CvScalar *size, int *underline, float *diaphaneity)
+{
+	// 参数合法性检查
+
+	if (type)
+	{
+		if (type >= 0) ft->m_fontType = *type;
+	}
+	if (size)
+	{
+		ft->m_fontSize.val[0] = fabs(size->val[0]);
+		ft->m_fontSize.val[1] = fabs(size->val[1]);
+		ft->m_fontSize.val[2] = fabs(size->val[2]);
+		ft->m_fontSize.val[3] = fabs(size->val[3]);
+	}
+	if (underline)
+	{
+		ft->m_fontUnderline = *underline;
+	}
+	if (diaphaneity)
+	{
+		ft->m_fontDiaphaneity = *diaphaneity;
+	}
+	printf("FT_Set_Pixel_Sizes = %d\n", (int)ft->m_fontSize.val[0]);
+	FT_Set_Pixel_Sizes(ft->m_face, (int)ft->m_fontSize.val[0], 0);
+}
+
+void restoreFont(ForFreeType * ft)
+{
+	ft->m_fontType = 0;            // 字体类型(不支持)
+
+	ft->m_fontSize.val[0] = 20;      // 字体大小
+	ft->m_fontSize.val[1] = 0.5;   // 空白字符大小比例
+	ft->m_fontSize.val[2] = 0.1;   // 间隔大小比例
+	ft->m_fontSize.val[3] = 0;      // 旋转角度(不支持)
+
+	ft->m_fontUnderline = 0;   // 下画线(不支持)
+
+	ft->m_fontDiaphaneity = 1.0;   // 色彩比例(可产生透明效果)
+
+							   // 设置字符大小
+
+	FT_Set_Pixel_Sizes(ft->m_face, (int)ft->m_fontSize.val[0], 0);
+}
+
+
+
+void init_my_free_type(ForFreeType * ft)
+{
+	if (ft == NULL)
+	{
+
+	}
+	int flag = FT_Init_FreeType(&ft->m_library);
+	if (flag == 0)
+	{
+		flag = FT_New_Face(ft->m_library, "C:\\Windows\\Fonts\\STFANGSO.ttf", 0, &ft->m_face);
+		if (flag == 0)
+		{
+			restoreFont(ft);
+		}
+		setlocale(0, "");
+	}
+}
+
+void freetype_puttext(IplImage* show_img, ForFreeType * ft,const char * name, int font_size, int x,int y, CvScalar color)
+{
+	printf("freetype_puttext font_size=%d\n",font_size);
+	//init_my_free_type(ft);
+	float p = 0.9;
+	CvScalar scalar;
+	scalar.val[0] = font_size ;
+	scalar.val[1] = 0.5;
+	scalar.val[2] = 0.1;
+	setFont(ft,NULL, &scalar, NULL, &p);
+	putText12(ft, show_img, name , cvPoint(x, y), color);
+
+}
+
+void draw_detections(image im, int num, float thresh, box *boxes, float **probs, char **names, image **alphabet, int classes, ForFreeType * myft)
 {
     int i;
 
@@ -198,6 +459,14 @@ void draw_detections(image im, int num, float thresh, box *boxes, float **probs,
             }
 
             printf("%s: %.0f%%\n", names[class], prob*100);
+			#ifdef CHINESE
+				printf("chinese\n");
+			#else
+				printf("No chinese\n");
+			#endif
+			printf("class=%d\n", class);
+
+
             int offset = class*123457 % classes;
             float red = get_color(2,offset,classes);
             float green = get_color(1,offset,classes);
@@ -222,16 +491,22 @@ void draw_detections(image im, int num, float thresh, box *boxes, float **probs,
             if(bot > im.h-1) bot = im.h-1;
 
             draw_box_width(im, left, top, right, bot, width, red, green, blue);
-            if (alphabet) {
-                image label = get_label(alphabet, names[class], (im.h*.03)/10);
-                draw_label(im, top + width, left, label, rgb);
-            }
+			{
+				if (alphabet) {
+					#ifdef CHINESE
+						image label = get_label_chinese(alphabet, class, (im.h*.03) / 10);
+					#else
+						image label = get_label(alphabet, names[class], (im.h*.03)/10);
+					#endif
+					draw_label(im, top + width, left, label, rgb);
+				}
+			}
         }
     }
 }
+const int font_size_dict[8] = {12,24,36,60,72,84,96};
 
-#ifdef OPENCV
-void draw_detections_cv(IplImage* show_img, int num, float thresh, box *boxes, float **probs, char **names, image **alphabet, int classes)
+void draw_detections_cv(IplImage* show_img, int num, float thresh, box *boxes, float **probs, char **names, image **alphabet, int classes, ForFreeType * myft)
 {
 	int i;
 
@@ -247,7 +522,15 @@ void draw_detections_cv(IplImage* show_img, int num, float thresh, box *boxes, f
 				alphabet = 0;
 			}
 
+			printf("draw_detections_cv\n");
 			printf("%s: %.0f%%\n", names[class], prob * 100);
+			#ifdef CHINESE
+				printf("chinese\n");
+			#else
+				printf("No chinese\n");
+			#endif
+			printf("class=%d\n", class);
+
 			int offset = class * 123457 % classes;
 			float red = get_color(2, offset, classes);
 			float green = get_color(1, offset, classes);
@@ -278,7 +561,7 @@ void draw_detections_cv(IplImage* show_img, int num, float thresh, box *boxes, f
 			pt2.x = right;
 			pt2.y = bot;
 			pt_text.x = left;
-			pt_text.y = top - 12;
+			pt_text.y = top ;
 			pt_text_bg1.x = left;
 			pt_text_bg1.y = top - (10+25*font_size);
 			pt_text_bg2.x = right;
@@ -292,11 +575,17 @@ void draw_detections_cv(IplImage* show_img, int num, float thresh, box *boxes, f
 
 			cvRectangle(show_img, pt_text_bg1, pt_text_bg2, color, width, 8, 0);
 			cvRectangle(show_img, pt_text_bg1, pt_text_bg2, color, CV_FILLED, 8, 0);	// filled
+																						
+			/*CvFont font;
+			cvInitFont(&font, CV_FONT_HERSHEY_SIMPLEX, font_size, font_size, 0, font_size * 3, 8);
+			cvPutText(show_img, names[class], pt_text, &font, black_color);
+			*/
+			int size = (show_img->height * .03) / 10;
+			if (size > 7) size = 7;
 			CvScalar black_color;
 			black_color.val[0] = 0;
-			CvFont font;
-			cvInitFont(&font, CV_FONT_HERSHEY_SIMPLEX, font_size, font_size, 0, font_size * 3, 8);	
-			cvPutText(show_img, names[class], pt_text, &font, black_color);
+			freetype_puttext(show_img, myft, names[class], font_size_dict[size], pt_text.x, pt_text.y,    black_color);
+			freetype_puttext(show_img, myft, names[class], font_size_dict[size], pt_text.x-1, pt_text.y-1,CV_RGB(255,255,255));
 		}
 	}
 }

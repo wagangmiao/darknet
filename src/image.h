@@ -7,6 +7,7 @@
 #include <string.h>
 #include <math.h>
 #include "box.h"
+#include "./forfreetype.h"
 
 typedef struct {
     int h;
@@ -15,6 +16,17 @@ typedef struct {
     float *data;
 } image;
 
+typedef struct ForFreeType {
+	FT_Library   m_library;
+	FT_Face      m_face;
+	
+	int         m_fontType;
+	CvScalar    m_fontSize;
+	int		    m_fontUnderline;
+	float       m_fontDiaphaneity;
+
+}ForFreeType;
+
 float get_color(int c, int x, int max);
 void flip_image(image a);
 void draw_box(image a, int x1, int y1, int x2, int y2, float r, float g, float b);
@@ -22,7 +34,7 @@ void draw_box_width(image a, int x1, int y1, int x2, int y2, int w, float r, flo
 void draw_bbox(image a, box bbox, int w, float r, float g, float b);
 void draw_label(image a, int r, int c, image label, const float *rgb);
 void write_label(image a, int r, int c, image *characters, char *string, float *rgb);
-void draw_detections(image im, int num, float thresh, box *boxes, float **probs, char **names, image **labels, int classes);
+void draw_detections(image im, int num, float thresh, box *boxes, float **probs, char **names, image **labels, int classes, ForFreeType * myft);
 image image_distance(image a, image b);
 void scale_image(image m, float s);
 image crop_image(image im, int dx, int dy, int w, int h);
@@ -74,7 +86,10 @@ image float_to_image(int w, int h, int c, float *data);
 image copy_image(image p);
 image load_image(char *filename, int w, int h, int c);
 image load_image_color(char *filename, int w, int h);
+
 image **load_alphabet();
+image **load_alphabet_fromdir(const char * labels_dir,int class_num);
+
 
 float get_pixel(image m, int x, int y, int c);
 float get_pixel_extend(image m, int x, int y, int c);

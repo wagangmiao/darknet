@@ -451,11 +451,17 @@ void validate_detector_recall(char *datacfg, char *cfgfile, char *weightfile)
 
 void test_detector(char *datacfg, char *cfgfile, char *weightfile, char *filename, float thresh)
 {
-    list *options = read_data_cfg(datacfg);
-    char *name_list = option_find_str(options, "names", "data/names.list");
-    char **names = get_labels(name_list);
+	ForFreeType m_freetype;
+	init_my_free_type(&m_freetype);
 
-    image **alphabet = load_alphabet();
+    list *options = read_data_cfg(datacfg);
+	int class_num = option_find_int(options, "classes", 0);
+    char *name_list = option_find_str(options, "names", "data/names.list");
+	char *labels_dir = option_find_str(options, "labels", "data/labels");
+    char **names = get_labels(name_list);
+    
+	image **alphabet = load_alphabet_fromdir(labels_dir, class_num);
+
     network net = parse_network_cfg(cfgfile);
     if(weightfile){
         load_weights(&net, weightfile);
@@ -491,7 +497,7 @@ void test_detector(char *datacfg, char *cfgfile, char *weightfile, char *filenam
         printf("%s: Predicted in %f seconds.\n", input, sec(clock()-time));
         get_region_boxes(l, 1, 1, thresh, probs, boxes, 0, 0);
         if (nms) do_nms_sort(boxes, probs, l.w*l.h*l.n, l.classes, nms);
-        draw_detections(im, l.w*l.h*l.n, thresh, boxes, probs, names, alphabet, l.classes);
+		draw_detections(im, l.w*l.h*l.n, thresh, boxes, probs, names, alphabet, l.classes,&m_freetype);
         save_image(im, "predictions");
         show_image(im, "predictions");
 

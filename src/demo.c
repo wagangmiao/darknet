@@ -21,6 +21,7 @@
 #include "opencv2/highgui/highgui_c.h"
 #include "opencv2/imgproc/imgproc_c.h"
 #include "opencv2/core/version.hpp"
+
 #ifndef CV_VERSION_EPOCH
 #include "opencv2/videoio/videoio_c.h"
 #endif
@@ -48,11 +49,13 @@ static image images[FRAMES];
 static IplImage* ipl_images[FRAMES];
 static float *avg;
 
-void draw_detections_cv(IplImage* show_img, int num, float thresh, box *boxes, float **probs, char **names, image **alphabet, int classes);
+void draw_detections_cv(IplImage* show_img, int num, float thresh, box *boxes, float **probs, char **names, image **alphabet, int classes, ForFreeType * myft);
 image get_image_from_stream_resize(CvCapture *cap, int w, int h, IplImage** in_img);
 IplImage* in_img;
 IplImage* det_img;
 IplImage* show_img;
+
+static ForFreeType m_freetype;
 
 void *fetch_in_thread(void *ptr)
 {
@@ -101,7 +104,7 @@ void *detect_in_thread(void *ptr)
     demo_index = (demo_index + 1)%FRAMES;
 	    
 	//draw_detections(det, l.w*l.h*l.n, demo_thresh, boxes, probs, demo_names, demo_alphabet, demo_classes);
-	draw_detections_cv(det_img, l.w*l.h*l.n, demo_thresh, boxes, probs, demo_names, demo_alphabet, demo_classes);
+	draw_detections_cv(det_img, l.w*l.h*l.n, demo_thresh, boxes, probs, demo_names, demo_alphabet, demo_classes,&m_freetype);
 
 	return 0;
 }
@@ -115,9 +118,14 @@ double get_wall_time()
     return (double)time.tv_sec + (double)time.tv_usec * .000001;
 }
 
+
 void demo(char *cfgfile, char *weightfile, float thresh, int cam_index, const char *filename, char **names, int classes, int frame_skip, char *prefix, char *out_filename)
 {
     //skip = frame_skip;
+	
+
+	init_my_free_type(&m_freetype);
+
     image **alphabet = load_alphabet();
     int delay = frame_skip;
     demo_names = names;
